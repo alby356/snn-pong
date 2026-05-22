@@ -5,27 +5,12 @@ WIDTH, HEIGHT = 800, 600
 ball_size = 10
 paddle_height = 80
 paddle_width = 10
-paddle_speed = 6
+paddle_speed = 5
+N_HIDDEN = 15
 
-dt = 1.0
-threshold = -55
-reset = -70
-leak = 0.1
-N_INPUT = 10
-N_HIDDEN = 20
-
-def encode_input(ball_y, paddle_center):
-    ball_norm = ball_y / HEIGHT
-    paddle_norm = paddle_center / HEIGHT
-    diff_norm = (ball_y - paddle_center) / HEIGHT
-    centers = np.linspace(0, 1, N_INPUT - 2)
-    sigma = 1.0 / (N_INPUT - 2)
-    ball_enc = np.exp(-0.5 * ((ball_norm - centers) / sigma) ** 2)
-    return np.append(ball_enc, [diff_norm, paddle_norm]) * 3.0
-
-# Load best weights
-W1 = np.load("best_W1.npy")
-W2 = np.load("best_W2.npy")
+weights = np.load("best_weights.npy")
+W1 = weights[:N_HIDDEN * 3].reshape(N_HIDDEN, 3)
+W2 = weights[N_HIDDEN * 3:].reshape(1, N_HIDDEN)
 
 pygame.init()
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
@@ -38,9 +23,7 @@ ball_x, ball_y = WIDTH // 2, HEIGHT // 2
 ball_dx, ball_dy = 3, 2
 
 player_paddle_y = HEIGHT // 2 - paddle_height // 2
-ai_paddle_y = HEIGHT // 2 - paddle_height // 2
-
-v_hidden = np.full(N_HIDDEN, -70.0)
+ai_y = HEIGHT // 2 - paddle_height // 2
 
 player_score = 0
 ai_score = 0
@@ -58,20 +41,21 @@ while running:
     if keys[pygame.K_DOWN] and player_paddle_y < HEIGHT - paddle_height:
         player_paddle_y += paddle_speed
 
-    paddle_center = ai_paddle_y + paddle_height // 2
-    inp = encode_input(ball_y, paddle_center)
+    ai_center = ai_y + paddle_height // 2
+    inp = np.array([
+        (ball_y - ai_center) / HEIGHT,
+        ball_dy / 5.0,
+        (ball_x - WIDTH/2) / WIDTH
+    ])
 
-    hidden_input = W1 @ inp
-    v_hidden += dt * (-leak * (v_hidden - reset) + hidden_input)
-    fired = v_hidden >= threshold
-    v_hidden[fired] = reset
+    hidden = np.tanh(W1 @ inp)
+    output = np.tanh((W2 @ hidden)[0])
 
-    output = (W2 @ fired.astype(float))[0]
-
-    if output > 0.5 and ai_paddle_y < HEIGHT - paddle_height:
-        ai_paddle_y += paddle_speed
-    elif output < -0.5 and ai_paddle_y > 0:
-        ai_paddle_y -= paddle_speed
+    # Fixed speed movement like player
+    if output > 0.1 and ai_y < HEIGHT - paddle_height:
+        ai_y += paddle_speed
+    elif output < -0.1 and ai_y > 0:
+        ai_y -= paddle_speed
 
     ball_x += ball_dx
     ball_y += ball_dy
@@ -79,30 +63,41 @@ while running:
     if ball_y <= 0 or ball_y >= HEIGHT - ball_size:
         ball_dy *= -1
 
-    if (ball_x <= 30 + paddle_width and
-            player_paddle_y <= ball_y <= player_paddle_y + paddle_height):
+    # Player paddle hit
+    if (ball_x <= 20 + paddle_width and
+            ball_x >= 20 and
+            player_paddle_y <= ball_y + ball_size and
+            ball_y <= player_paddle_y + paddle_height):
         ball_dx = abs(ball_dx)
+        ball_x = 20 + paddle_width + 1
 
-    if (ball_x >= WIDTH - 30 - paddle_width - ball_size and
-            ai_paddle_y <= ball_y <= ai_paddle_y + paddle_height):
+    # AI paddle hit
+    ai_paddle_x = WIDTH - 30
+    if (ball_x + ball_size >= ai_paddle_x and
+            ball_x <= ai_paddle_x + paddle_width and
+            ai_y <= ball_y + ball_size and
+            ball_y <= ai_y + paddle_height):
         ball_dx = -abs(ball_dx)
+        ball_x = ai_paddle_x - ball_size - 1
         hits += 1
 
+    # Player scores - ball goes past AI
+    if ball_x + ball_size > WIDTH:
+        player_score += 1
+        ball_x, ball_y = WIDTH // 2, HEIGHT // 2
+        ball_dx = -3
+        ball_dy = np.random.choice([-2, 2])
+
+    # AI scores - ball goes past player
     if ball_x < 0:
         ai_score += 1
         ball_x, ball_y = WIDTH // 2, HEIGHT // 2
         ball_dx = 3
         ball_dy = np.random.choice([-2, 2])
 
-    if ball_x > WIDTH:
-        player_score += 1
-        ball_x, ball_y = WIDTH // 2, HEIGHT // 2
-        ball_dx = -3
-        ball_dy = np.random.choice([-2, 2])
-
     screen.fill((0, 0, 0))
     pygame.draw.rect(screen, (255, 255, 255), (20, player_paddle_y, paddle_width, paddle_height))
-    pygame.draw.rect(screen, (0, 255, 0), (WIDTH - 30, ai_paddle_y, paddle_width, paddle_height))
+    pygame.draw.rect(screen, (0, 255, 0), (ai_paddle_x, ai_y, paddle_width, paddle_height))
     pygame.draw.rect(screen, (255, 255, 255), (ball_x, ball_y, ball_size, ball_size))
 
     player_text = font.render(str(player_score), True, (255, 255, 255))
